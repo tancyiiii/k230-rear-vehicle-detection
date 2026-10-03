@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv*/
+venv/
+
+# 大文件（超过 GitHub 100MB 单文件限制的压缩包）
+后方来车.zip
+*.zip.tmp
+
+# 虚拟环境与缓存
+k230_deploy/.venv_deploy/
+k230_deploy/.ultralytics/
+k230_deploy/Ultralytics/
+k230_deploy/tmp/
+k230_deploy/runs/
+
+# 工具链产物（可按 requirements 重新安装 / 官网下载）
+k230_deploy/tools/dotnet7/
+k230_deploy/tools/dotnet-runtime-7.0.20-win-x64.zip
+k230_deploy/tools/wheels/
+
+# 训练中间产物
+k230_deploy/dataset/coco128/
+k230_deploy/tools/.k230_canmv_src_git_backup/

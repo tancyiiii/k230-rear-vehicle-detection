@@ -1,0 +1,13 @@
+path: C:/k230_deploy/dataset
+train: train/images
+val: valid/images
+test: valid/images
+
+nc: 6
+names:
+  0: bus
+  1: car
+  2: microbus
+  3: motorbike
+  4: pickup-van
+  5: truck

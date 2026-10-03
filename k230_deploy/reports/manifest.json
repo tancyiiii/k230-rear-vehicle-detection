@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-10-02T20:42:35",
+  "files": [
+    {
+      "path": "models\\best.pt",
+      "size_bytes": 5520529,
+      "sha256": "3aaf7471b33fd240bb24a39b8d476b265e05dd390876aefa4413c94c917cb34b"
+    },
+    {
+      "path": "models\\yolo11n_coco.pt",
+      "size_bytes": 5613764,
+      "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+    },
+    {
+      "path": "onnx\\best_320.onnx",
+      "size_bytes": 10482317,
+      "sha256": "13fe71113eb339ff19a74dd72c91052ae2a093d9883e49e781c685db5668e36f"
+    },
+    {
+      "path": "onnx\\best_640.onnx",
+      "size_bytes": 10608425,
+      "sha256": "ff6d0501a7f40c7fbae874b50cff6d7b8e36777234720c6f5e49609d2c56769c"
+    },
+    {
+      "path": "onnx\\person_320.onnx",
+      "size_bytes": 10615083,
+      "sha256": "ecaa6ee6692d5215d8e6fbdd6dec2c3e016bcfd9a7b4a17cf2755170d41fea6b"
+    },
+    {
+      "path": "kmodel\\best_320.kmodel",
+      "size_bytes": 3044024,
+      "sha256": "821ac5a87fe039b289e6ac07a697a983b7677be891744edd58d1fa6afc542615"
+    },
+    {
+      "path": "kmodel\\best_640.kmodel",
+      "size_bytes": 3417528,
+      "sha256": "661539442b5494eb6625fbfc772d35e87a44f04bdf733d0c45b0a7fc60dc4ca4"
+    },
+    {
+      "path": "kmodel\\person_320.kmodel",
+      "size_bytes": 3097248,
+      "sha256": "6403bebf0a6e29f7c26ed6f4bd99174bb96ac48fe5a3a185476be25fc73e00dc"
+    },
+    {
+      "path": "board\\main.py",
+      "size_bytes": 539,
+      "sha256": "70da44da3da6120c01cd41a6182528e2c496c341ddcf42ceb8e8627523c6446a"
+    },
+    {
+      "path": "board\\rear_vehicle_yolo11.py",
+      "size_bytes": 24886,
+      "sha256": "101e9f51f0a4f00170550902e879c2c9cc8e7ce8d62a9fbfc86ae1510a22d588"
+    },
+    {
+      "path": "board\\rear_vehicle_yolo11_640.py",
+      "size_bytes": 19396,
+      "sha256": "505f9577a87eb61602b2b97266b8b80f81b09c12283e2bb53bbdde711ab5fa3d"
+    },
+    {
+      "path": "board\\labels.txt",
+      "size_bytes": 53,
+      "sha256": "085ca7572f83aaf0db1ece2e23e90b470d35f4ac3da5ae8fa180d29710e170a5"
+    },
+    {
+      "path": "rear_vehicle_k230_320.zip",
+      "size_bytes": 5186761,
+      "sha256": "b58d7ed468ae7e3f260d43d525f17c6b78496b9b59cef1f0bcc0dde4b64c73b7"
+    },
+    {
+      "path": "rear_vehicle_k230_640.zip",
+      "size_bytes": 2658698,
+      "sha256": "405ef87e58af3bedef346b7fa57f5c20b9b1fffda39b3c061f7b844060922155"
+    }
+  ]
+}

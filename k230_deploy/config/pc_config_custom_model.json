@@ -1,0 +1,65 @@
+{
+  "camera": {
+    "source": "0",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "backend": "auto"
+  },
+  "model": {
+    "weights": "models/best.pt",
+    "device": "auto",
+    "imgsz": 320,
+    "confidence": 0.4,
+    "iou": 0.5,
+    "tracker": "bytetrack.yaml",
+    "classes": [0, 1, 2, 3, 4, 5]
+  },
+  "distance": {
+    "focal_length_px": null,
+    "horizontal_fov_deg": 120.0,
+    "calibration_file": null,
+    "target_widths_m": {
+      "0": 2.5,
+      "1": 1.8,
+      "2": 2.0,
+      "3": 0.8,
+      "4": 2.0,
+      "5": 2.5
+    }
+  },
+  "filter": {
+    "min_box_width_px": 12.0,
+    "max_distance_m": 40.0,
+    "smoothing_window": 5,
+    "confirm_frames": 3,
+    "max_dt_s": 1.0,
+    "max_speed_mps": 40.0,
+    "approaching_epsilon_mps": 0.2,
+    "track_timeout_s": 1.5
+  },
+  "risk": {
+    "safe_distance_m": 25.0,
+    "attention_distance_m": 10.0,
+    "attention_speed_mps": 5.0,
+    "safe_ttc_s": 5.0,
+    "danger_ttc_s": 2.0
+  },
+  "alerts": {
+    "backend": "console",
+    "active_high": true,
+    "green_led_pin": 17,
+    "yellow_led_pin": 27,
+    "red_led_pin": 22,
+    "buzzer_pin": 23,
+    "vibration_pin": 24,
+    "attention_beep_on_s": 0.15,
+    "attention_beep_off_s": 0.85
+  },
+  "output": {
+    "show_window": true,
+    "save_video": null,
+    "log_csv": "events.csv",
+    "display_scale": 1.0
+  }
+}

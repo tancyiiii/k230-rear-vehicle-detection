@@ -1,0 +1,14 @@
+path: C:/Users/宋铭曦/Desktop/后方来车/后方来车/software/Rear_Vehicle_Recognition_YOLOv11/train
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 6
+names: ['bus', 'car', 'microbus', 'motorbike', 'pickup-van', 'truck']
+
+roboflow:
+  workspace: lynkeus
+  project: vehicle-detection-mgjdd
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/lynkeus/vehicle-detection-mgjdd/dataset/3

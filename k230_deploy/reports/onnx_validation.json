@@ -1,0 +1,52 @@
+{
+  "best_640_640": {
+    "model": "C:\\Users\\29813\\Desktop\\k230识别\\k230_deploy\\onnx\\best_640.onnx",
+    "imgsz": 640,
+    "metrics": {
+      "metrics/precision(B)": 0.8147942324766465,
+      "metrics/recall(B)": 0.7612913568380777,
+      "metrics/mAP50(B)": 0.8167843279539119,
+      "metrics/mAP50-95(B)": 0.4928204128065487,
+      "fitness": 0.4928204128065487
+    },
+    "speed_ms_per_image": {
+      "preprocess": 3.0006862332630724,
+      "inference": 57.18961548759067,
+      "loss": 0.002163288713424,
+      "postprocess": 4.045375430217779
+    },
+    "class_names": {
+      "0": "bus",
+      "1": "car",
+      "2": "microbus",
+      "3": "motorbike",
+      "4": "pickup-van",
+      "5": "truck"
+    }
+  },
+  "best_320_320": {
+    "model": "C:\\Users\\29813\\Desktop\\k230识别\\k230_deploy\\onnx\\best_320.onnx",
+    "imgsz": 320,
+    "metrics": {
+      "metrics/precision(B)": 0.7706836006091425,
+      "metrics/recall(B)": 0.7056290591206541,
+      "metrics/mAP50(B)": 0.7580372157483102,
+      "metrics/mAP50-95(B)": 0.44155329224511175,
+      "fitness": 0.44155329224511175
+    },
+    "speed_ms_per_image": {
+      "preprocess": 6.167365774401948,
+      "inference": 21.099065774395694,
+      "loss": 0.001708413015966859,
+      "postprocess": 1.7701763862459934
+    },
+    "class_names": {
+      "0": "bus",
+      "1": "car",
+      "2": "microbus",
+      "3": "motorbike",
+      "4": "pickup-van",
+      "5": "truck"
+    }
+  }
+}
