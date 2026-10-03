@@ -36,7 +36,7 @@ MODEL_INPUT_SIZE = 320
 PERSON_KMODEL_PATH = "/sdcard/rear_vehicle/person_320.kmodel"
 PERSON_CLASS_ID = 6
 RGB888P_SIZE = [320, 320]
-DISPLAY_SIZE = [320, 320]
+DISPLAY_SIZE = [800, 480]
 DISPLAY_MODE = "virt"  # "virt" for CanMV IDE, "lcd" physical screen, "hdmi"
 
 LABELS = ["bus", "car", "microbus", "motorbike", "pickup-van", "truck", "person"]
@@ -101,7 +101,11 @@ def _box_iou(a, b):
 
 
 class VirtualPipeLine:
-    """Inference-aligned RGB565 display pipeline for the CanMV IDE."""
+    """Official K230 layer pipeline using the CanMV IDE virtual frame buffer.
+
+    chn0 输出 YUV 并 bind_layer 到显示视频层（摄像头原图直通），
+    chn2 输出 RGB888P 供 AI 推理，OSD 用独立 ARGB8888 图层叠加检测框。
+    """
 
     def __init__(self, rgb888p_size, display_size):
         self.rgb888p_size = [ALIGN_UP(rgb888p_size[0], 16), rgb888p_size[1]]
@@ -113,8 +117,13 @@ class VirtualPipeLine:
     def create(self):
         self.sensor = Sensor(id=2)
         self.sensor.reset()
+        self.sensor.set_framesize(width=self.display_size[0], height=self.display_size[1], chn=CAM_CHN_ID_0)
+        self.sensor.set_pixformat(PIXEL_FORMAT_YUV_SEMIPLANAR_420, chn=CAM_CHN_ID_0)
         self.sensor.set_framesize(width=self.rgb888p_size[0], height=self.rgb888p_size[1], chn=CAM_CHN_ID_2)
         self.sensor.set_pixformat(PIXEL_FORMAT_RGB_888_PLANAR, chn=CAM_CHN_ID_2)
+        self.osd_img = image.Image(self.display_size[0], self.display_size[1], image.ARGB8888)
+        bind_info = self.sensor.bind_info(x=0, y=0, chn=CAM_CHN_ID_0)
+        Display.bind_layer(**bind_info, layer=Display.LAYER_VIDEO1)
         Display.init(Display.VIRT, width=self.display_size[0], height=self.display_size[1], to_ide=True)
         MediaManager.init()
         self.sensor.run()
@@ -122,15 +131,10 @@ class VirtualPipeLine:
 
     def get_frame(self):
         ai_frame = self.sensor.snapshot(chn=CAM_CHN_ID_2)
-        self.osd_img = ai_frame.to_rgb565().copy()
-        try:
-            self.osd_img.gamma(2.0)
-        except BaseException:
-            pass
         return ai_frame.to_numpy_ref()
 
     def show_image(self):
-        Display.show_image(self.osd_img)
+        Display.show_image(self.osd_img, 0, 0, Display.LAYER_OSD3)
 
     def destroy(self):
         if self.sensor is not None:
@@ -300,7 +304,8 @@ class DetectionApp(AIBase):
         return keep
 
     def draw_result(self, pipeline, detections, overall_risk):
-        # Keep the live camera frame; clear() would turn the IDE view black.
+        # OSD 是独立 ARGB 图层；clear 只清检测框，摄像头画面由视频层直通，不受影响。
+        pipeline.osd_img.clear()
         for detection in detections:
             x1, y1, x2, y2 = detection[:4]
             class_id = int(detection[5])
