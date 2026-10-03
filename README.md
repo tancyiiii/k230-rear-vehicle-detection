@@ -169,7 +169,7 @@ ENABLE_VEHICLE_BUZZER = False
 当前 320 主程序默认使用 CanMV IDE 虚拟显示：
 
 ```python
-DISPLAY_SIZE = [320, 320]
+DISPLAY_SIZE = [800, 480]
 DISPLAY_MODE = "virt"
 ```
 
@@ -426,7 +426,7 @@ k230识别/
 
 | 文件 | 当前状态 |
 |---|---|
-| `board/rear_vehicle_yolo11.py` | 最新版，710 行，SHA-256 `A802E89145B2121219294E9D5D4217BDF479D6A3F4A08EB918E9E23025A976B0` |
+| `board/rear_vehicle_yolo11.py` | 最新版，715 行（已恢复双层显示管线修复黑屏），SHA-256 `11F9A9FA0703493A843CF9530A3D0DA9832DBB420EBEAE0C808A1771F2D62BF4` |
 | `package/rear_vehicle_320/rear_vehicle_yolo11.py` | 旧版，690 行，与最新 board 不一致 |
 | `rear_vehicle_k230_320.zip` | 旧版，内含脚本 SHA-256 `101E9F51F0A4F00170550902E879C2C9CC8E7CE8D62A9FBFC86AE1510A22D588` |
 | `board/rear_vehicle_yolo11_640.py` | 640 最新版，与 package/zip 一致 |
