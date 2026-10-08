@@ -1,0 +1,8 @@
+K230 speaker test - 2026-10-03
+SPEAKER_AMPLITUDE=0.08
+Probe: 1200 Hz, 350 ms, 44100 Hz stereo PCM
+Probe writes: all returned 0
+Probe result: TONE_OK
+Application: speaker ready, rate=44100
+Application: camera running, FPS 13.4-13.7
+Application init errors: none

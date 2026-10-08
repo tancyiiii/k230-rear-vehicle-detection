@@ -108,7 +108,7 @@ HORIZONTAL_FOV_DEG = 120.0
 - 安全：距离大于 25 m，无报警。
 - 注意：距离 10~25 m 且车辆正在接近，短鸣。
 - 危险：距离小于 10 m，高频鸣叫。
-- 蜂鸣器使用 `YbBuzzer`，没有阻塞摄像头主循环。
+- 喇叭使用 `YbSpeaker + pyaudio`，没有阻塞摄像头主循环。
 
 ## 7. 已优化项
 
@@ -167,7 +167,7 @@ STATS FPS=9.84 DET=1 VEH=1 PERSON=0 RISK=2
 1. 初始化摄像头。
 2. 加载 `best_320.kmodel`。
 3. 开始车辆识别。
-4. 根据风险等级控制蜂鸣器。
+4. 根据风险等级控制喇叭。
 
 软重启实测输出：
 
@@ -187,19 +187,70 @@ STATS FPS=18.7 DET=1 RISK=2
 
 再次上电后就不会自动运行识别程序。不要删除 `/sdcard/rear_vehicle/`，那里保存模型和主程序。
 
+## 10.1 USB 串口控制识别运行状态
+
+将 K230 上方的通信 USB-C 口连接到外部计算机。外部计算机会枚举出一个串口（Windows 为 `COMx`，Linux 通常为 `/dev/ttyACM0`），板端通过该 USB CDC 串口接收逐行 ASCII 命令。控制模块文件为：
+
+```text
+/sdcard/rear_vehicle/serial_control.py
+```
+
+主程序启动后默认运行。可发送：
+
+| 命令 | 响应 | 作用 |
+|---|---|---|
+| `0x01` | `CTRL OK RUNNING` | 恢复取帧、推理和报警 |
+| `0x00` | `CTRL OK STOPPED` | 暂停取帧和推理，并关闭报警 |
+| `STATUS` | `CTRL STATUS RUNNING/STOPPED` | 查询当前状态 |
+| `PING` | `CTRL PONG` | 测试通信 |
+
+正式启停协议使用单字节十六进制：`0x01` 启动，`0x00` 停止；板端返回对应的 `CTRL OK ...` 响应。
+
+控制模块使用后台线程阻塞读取 USB CDC 的 `stdin`，不依赖 `uselect.poll()`。控制端默认波特率为 `2000000 bps`，格式为 `8N1`。更新后需要重新复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端并重启；启动日志应出现 `serial control ready: stdin reader`。
+
+电脑端已提供调用脚本（需要 `pyserial`）：
+
+```powershell
+python k230_deploy/tools/serial_control_client.py --port COMx stop
+python k230_deploy/tools/serial_control_client.py --port COMx status
+python k230_deploy/tools/serial_control_client.py --port COMx start
+```
+
+`COMx` 必须替换为外部计算机实际识别出的端口。当前通信协议先保留启停控制帧；如果还要传输业务数据，需要在此基础上约定数据帧格式。
+
+`STOP` 不会卸载模型或退出自动启动程序，适合外部设备反复控制；按 `Ctrl+C` 仍可退出主程序。
 
 
 
-## 11. 蜂鸣器修正
 
-蜂鸣器原实现会阻塞主循环，且 2600 Hz 音调不够响。现改为：
+## 11. 喇叭实现
 
-- 频率：2700 Hz
-- 占空比：50（有效方波）
-- 注意：鸣叫 180 ms，每 700 ms 重复
-- 危险：鸣叫 240 ms，每 220 ms 重复
-- PWM 全程非阻塞，识别循环继续运行
+报警输出已改为板载喇叭：
 
+- 驱动链路：YbSpeaker + media.pyaudio
+- 输出格式：44100 Hz、双声道、16-bit PCM
+- 行人语音：注意啦，后面有人
+- 车辆语音：注意啦，后面有车
+- 语音文件：`attention_person.pcm`、`attention_vehicle.pcm`
+- 蜂鸣提示：检测到目标时播放两声短蜂鸣，`YbBuzzer` 音量 100；同一风险等级和目标类型 5 秒内不重复蜂鸣或播报
+- 旋律播放：后台线程循环，风险消失立即停止
+- 音量参数：`SPEAKER_AMPLITUDE = 1.0`，语音 PCM 使用 `SPEECH_GAIN = 12.0` 增益并限幅以提高平均响度，蜂鸣音色与 `voice -1.py` 一致（2700 Hz、100%、80 ms 两声）。
+- 后台线程播放，摄像头和 AI 推理循环保持运行
+
+### 11.1 “试音”四档音量测试
+
+`tools/speaker_volume_test.py` 是独立的喇叭测试程序，不会修改识别主程序。把该脚本和以下四个文件复制到板端 `/sdcard/rear_vehicle/` 后，在 CanMV IDE 运行脚本：
+
+```text
+test_sound_25.pcm
+test_sound_50.pcm
+test_sound_75.pcm
+test_sound_100.pcm
+```
+
+脚本会依次播报“试音”，音量为 25%、50%、75%、100%，每档间隔 700 ms。PCM 格式为 44100 Hz、双声道、16-bit little-endian。
+
+运行前先停止正在运行的 `main.py` 或识别程序，避免摄像头程序占用 `MediaManager`。串口会依次打印资源检查和 `audio/media/speaker/stream` 初始化阶段；若提示 `PCM file not found`，说明四个音频文件还没有复制到板端。
 
 
 ## 12. 人物输出解析修正
@@ -211,17 +262,17 @@ STATS FPS=18.7 DET=1 RISK=2
 - 开机前 1.2 秒不报警，避免启动瞬间误报。
 
 
-## 13. 当前蜂鸣器策略
+## 13. 当前喇叭策略
 
 当前最终版本设置为：
 
-`python
-ENABLE_PERSON_BUZZER = True`nENABLE_VEHICLE_BUZZER = False
-` 
+```python
+ENABLE_PERSON_SPEAKER = True
+ENABLE_VEHICLE_SPEAKER = True
+```
+摄像头、车辆检测、人物检测和开机自动启动都会继续运行；车辆风险和人物风险都会触发喇叭。
 
-摄像头、车辆检测、人物检测和开机自动启动都会继续运行；车辆风险只显示不蜂鸣，检测到 person 时才会蜂鸣。
-
-如需让车辆也蜂鸣，把 ENABLE_VEHICLE_BUZZER 改为 True。
+如需关闭车辆发声，把 ENABLE_VEHICLE_SPEAKER 改为 False。
 
 
 

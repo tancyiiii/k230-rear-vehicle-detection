@@ -7,7 +7,7 @@
 
 ## 1. 项目简介
 
-本工程实现一套面向骑行场景的后方来车识别与预警系统，运行平台为 CanMV K230。系统通过 GC2093 CSI2 摄像头获取后方画面，使用 YOLO11n 模型的 K230 INT8 `kmodel` 执行检测，再完成跟踪、单目测距、风险分级、画面叠加和蜂鸣器报警。
+本工程实现一套面向骑行场景的后方来车识别与预警系统，运行平台为 CanMV K230。系统通过 GC2093 CSI2 摄像头获取后方画面，使用 YOLO11n 模型的 K230 INT8 `kmodel` 执行检测，再完成跟踪、单目测距、风险分级、画面叠加和喇叭报警。
 
 当前 320 版本同时运行两个模型：
 
@@ -23,7 +23,7 @@
 - 基于目标宽度或高度的单目距离估算
 - 安全、注意、危险三级风险判断
 - LCD、HDMI 或 CanMV IDE 虚拟显示
-- YbBuzzer 非阻塞报警
+- 板载喇叭非阻塞报警
 - `/sdcard/main.py` 开机自动运行
 - 电脑端 ONNX 导出、nncase 转换、验证和部署工具
 
@@ -87,6 +87,7 @@ rear_vehicle_yolo11_640.py
 2. Windows 文件资源管理器中通常会出现 `CanMV` 便携式设备。
 3. 进入 `CanMV/sdcard`。
 4. 将当前最新版文件从本工程的 `k230_deploy/board/` 和 `k230_deploy/kmodel/` 复制到 `/sdcard/rear_vehicle/`。
+其中 `serial_control.py` 也必须复制到 `/sdcard/rear_vehicle/`，用于 USB 通信口控制。
 5. 当前 320 源文件比 `rear_vehicle_k230_320.zip` 更新，发布或演示前应以 `k230_deploy/board/rear_vehicle_yolo11.py` 为准，不要直接依赖旧 ZIP。
 6. 等待文件写入完成后再拔线或断电。
 
@@ -107,8 +108,9 @@ DISPLAY_MODE = "virt"
 4. 点击运行。正常时串口会出现类似输出：
 
 ```text
-rear vehicle ready: /sdcard/rear_vehicle/best_320.kmodel person: /sdcard/rear_vehicle/person_320.kmodel person_buzzer: True vehicle_buzzer: False display: virt
-STATS FPS=... DET=... VEH=... PERSON=... RISK=... BUZZ=... DETAILS=...
+rear vehicle ready: /sdcard/rear_vehicle/best_320.kmodel person: /sdcard/rear_vehicle/person_320.kmodel person_speaker: True vehicle_speaker: True display: virt
+speaker ready: rate=44100
+STATS FPS=... DET=... VEH=... PERSON=... RISK=... SPK=... DETAILS=...
 ```
 
 ## 5. 运行逻辑
@@ -123,7 +125,7 @@ STATS FPS=... DET=... VEH=... PERSON=... RISK=... BUZZ=... DETAILS=...
 6. 合并检测框，执行 IoU 跟踪。
 7. 估算距离、接近速度和风险等级。
 8. 在画面上绘制检测框、类别、置信度、距离和风险状态。
-9. 根据当前策略更新蜂鸣器。
+9. 根据当前策略更新喇叭。
 
 车辆和人物模型是顺序执行的，不是两个 KPU 并行执行。320 双模型速度约 12.8 FPS，适合作为默认版本。
 
@@ -131,7 +133,7 @@ STATS FPS=... DET=... VEH=... PERSON=... RISK=... BUZZ=... DETAILS=...
 
 车辆默认参数：
 
-| 状态 | 条件 | 蜂鸣器 |
+| 状态 | 条件 | 喇叭 |
 |---|---|---|
 | 安全 | 距离大于 25 m，或无接近趋势 | 不响 |
 | 注意 | 距离 10~25 m 且接近速度不低于 0.2 m/s | 当前默认不响 |
@@ -139,7 +141,7 @@ STATS FPS=... DET=... VEH=... PERSON=... RISK=... BUZZ=... DETAILS=...
 
 人物默认参数：
 
-| 状态 | 条件 | 蜂鸣器 |
+| 状态 | 条件 | 喇叭 |
 |---|---|---|
 | 安全 | 距离大于 40 m | 不响 |
 | 注意 | 距离 15~40 m | 注意音 |
@@ -147,22 +149,28 @@ STATS FPS=... DET=... VEH=... PERSON=... RISK=... BUZZ=... DETAILS=...
 
 为避免单帧误报，风险需要连续 2 帧确认。程序启动前 1.2 秒也会静默。
 
-### 5.2 当前蜂鸣器策略
+### 5.2 当前喇叭策略
 
 当前 320 源码中的设置为：
 
 ```python
-ENABLE_PERSON_BUZZER = True
-ENABLE_VEHICLE_BUZZER = False
+ENABLE_PERSON_SPEAKER = True
+ENABLE_VEHICLE_SPEAKER = True
 ```
 
 也就是：
 
 - 车辆检测和风险显示继续工作。
-- 车辆风险不触发蜂鸣。
-- 检测到人物时按照注意或危险等级触发蜂鸣。
+- 车辆风险会触发喇叭。
+- 检测到人物时按照注意或危险等级触发喇叭。
 
-如果车辆也需要蜂鸣，将 `ENABLE_VEHICLE_BUZZER` 改为 `True`。注意音为 2700 Hz，每 700 ms 触发一次，每次 180 ms；危险音每 220 ms 触发一次，每次 240 ms。
+当前车辆和人物风险都会触发中文语音，并叠加两声短蜂鸣：行人播报“注意啦，后面有人”，车辆播报“注意啦，后面有车”。同一风险等级和目标类型在 5 秒内再次识别时只保持画面状态，不重复蜂鸣或播报。蜂鸣使用 `YbBuzzer`、音量 100；语音文件缺失时会自动使用短提示音兜底。
+
+### 5.3 “试音”四档音量测试
+
+使用 `k230_deploy/tools/speaker_volume_test.py` 可单独测试板载喇叭。将该脚本与 `test_sound_25.pcm`、`test_sound_50.pcm`、`test_sound_75.pcm`、`test_sound_100.pcm` 复制到 `/sdcard/rear_vehicle/`，脚本会依次播报“试音”四次，音量从 25% 逐档升至 100%。
+
+运行前先停止正在运行的识别程序；若串口提示 `PCM file not found`，请确认四个 PCM 文件已一起复制。
 
 ## 6. 显示模式
 
@@ -214,6 +222,37 @@ rear vehicle ready: ...
 - 删除 `/sdcard/main.py`，或将文件改名为 `main.py.bak`。
 - 不要删除 `/sdcard/rear_vehicle/`，否则模型和主程序会一并丢失。
 - 如果启动失败，程序会尝试写入 `/sdcard/rear_vehicle/boot_error.txt`。
+
+## 7.1 外部控制主程序运行
+
+将 K230 上方的通信 USB-C 口连接到另一台计算机。另一台计算机会枚举出一个新的串口（Windows 可能显示为 `COMx`，Linux 可能显示为 `/dev/ttyACM0`）。主程序启动后接收十六进制启停字节：
+
+```text
+0x01   -> CTRL OK RUNNING
+0x00   -> CTRL OK STOPPED
+STATUS -> CTRL STATUS RUNNING/STOPPED
+PING   -> CTRL PONG
+```
+
+正式启停协议为单字节：`0x01` 启动，`0x00` 停止。通信口收到命令后会返回 `CTRL OK RUNNING` 或 `CTRL OK STOPPED`。
+
+更新控制模块后必须重新复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端，并重启主程序；启动日志应包含 `serial control ready: stdin reader`。发送 `0x00` 后应收到 `CTRL OK STOPPED`，发送 `0x01` 后应收到 `CTRL OK RUNNING`。
+
+`STOP` 会暂停取帧、推理和报警，`START` 从下一帧恢复；模型不会重复加载。电脑端调用脚本：
+
+```powershell
+python k230_deploy/tools/serial_control_client.py --port COMx stop
+python k230_deploy/tools/serial_control_client.py --port COMx status
+python k230_deploy/tools/serial_control_client.py --port COMx start
+```
+
+这里的 `COMx` 必须替换成另一台计算机实际枚举到的端口。控制脚本的默认波特率为 `2000000 bps`，格式为 `8N1`；该 USB CDC 链路实际由固件处理，波特率主要用于串口工具参数一致。
+
+电脑端需要安装 `pyserial`：
+
+```powershell
+python -m pip install pyserial
+```
 
 ## 8. 参数调整
 
@@ -278,7 +317,7 @@ distance = focal_length_px × target_real_size / target_pixel_size
 /sdcard/rear_vehicle/rear_vehicle_yolo11_640.py
 ```
 
-640 程序只检测六类车辆，不检测人物，默认蜂鸣器频率为 1800 Hz / 2600 Hz。640 版适合验证精度，不建议在 K230 1G 上作为高帧率实时预警默认版本。
+640 程序只检测六类车辆，不检测人物；车辆报警默认开启，使用 44100 Hz 双声道 PCM 喇叭提示。640 版适合验证精度，不建议在 K230 1G 上作为高帧率实时预警默认版本。
 
 模型指标：
 
@@ -386,9 +425,9 @@ KMODEL 转换使用 `target = "k230"`、INT8、KLD 校准、`swapRB = False`，�
 k230识别/
 ├── README.md                         # 本文档
 ├── cam_preview.py                    # 单独测试摄像头
-├── text.py                           # 蜂鸣器基础测试
-├── voice.py                          # 蜂鸣器音量/旋律测试
-├── voice - 副本.py                   # 另一份蜂鸣器测试
+├── text.py                           # 喇叭基础测试
+├── voice.py                          # 喇叭音量/旋律测试
+├── voice - 副本.py                   # 另一份喇叭测试
 ├── canmv_ide_live.jpg                # CanMV IDE 实时画面截图
 ├── copy_dialog.jpg                   # IDE 复制提示截图
 ├── reload_dialog.jpg                 # IDE 重载提示截图
@@ -396,6 +435,7 @@ k230识别/
 └── k230_deploy/
     ├── README.md                     # 部署包说明，部分内容早于最终代码
     ├── board/                        # 最新板端源码
+    ├── audio/                        # “试音”母带和四档 PCM 音频
     ├── config/                       # 数据集和电脑端配置
     ├── dataset/                      # 车辆验证集（当前主要是 valid）
     ├── datasets/coco128/             # 人物模型验证数据
@@ -404,7 +444,7 @@ k230识别/
     ├── onnx/                         # 固定输入 ONNX
     ├── package/                      # 已展开的部署目录
     ├── reports/                      # 验证报告和哈希清单
-    ├── tools/                        # 导出、转换、验证、调试脚本
+    ├── tools/                        # 导出、转换、验证、调试及喇叭测试脚本
     ├── rear_vehicle_k230_320.zip     # 320 旧版打包，需按最新 board 重建
     └── rear_vehicle_k230_640.zip     # 640 打包
 ```
@@ -459,13 +499,13 @@ k230识别/
 
 先使用默认 `DISPLAY_MODE = "virt"` 验证。不要在未重新验证的情况下直接套用其他版本的显示参数。参考 `canmv_ide_live.jpg` 和 `reports/board_test.md` 中的显示记录。
 
-### 车辆有危险框但蜂鸣器不响
+### 车辆有危险框但喇叭不响
 
-这是当前设计。`ENABLE_VEHICLE_BUZZER = False`，只有人物报警默认开启。需要车辆报警时改成 `True`。
+当前 `ENABLE_VEHICLE_SPEAKER = True` 且 `ENABLE_PERSON_SPEAKER = True`，车辆和人物风险都会触发喇叭。
 
-### 蜂鸣器一直不响
+### 喇叭一直不响
 
-检查板端 `ybUtils/YbBuzzer.py`、`YbBuzzer` 初始化和 `ENABLE_PERSON_BUZZER` 设置。程序在没有 YbBuzzer 时仍会继续检测，但不会发声。
+检查板端 `ybUtils/YbSpeaker.py`、`media/pyaudio.py`、`ENABLE_PERSON_SPEAKER` 和 `SPEAKER_AMPLITUDE` 设置。程序在没有喇叭驱动时仍会继续检测，但不会发声。
 
 ### 串口被占用
 

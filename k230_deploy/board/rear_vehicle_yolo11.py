@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""K230 rear-vehicle recognition with YOLO11 and buzzer alerts.
+"""K230 rear-vehicle recognition with YOLO11 and speaker alerts.
 
 Deploy layout on the K230 SD card:
     /sdcard/rear_vehicle/best_320.kmodel
@@ -25,9 +25,34 @@ from media.media import *
 from media.sensor import *
 
 try:
+    import _thread
+except BaseException:
+    _thread = None
+
+from array import array
+
+try:
+    from ybUtils.YbSpeaker import YbSpeaker
+except BaseException:
+    YbSpeaker = None
+
+try:
     from ybUtils.YbBuzzer import YbBuzzer
 except BaseException:
     YbBuzzer = None
+
+try:
+    import media.pyaudio as pyaudio
+except BaseException:
+    try:
+        import pyaudio
+    except BaseException:
+        pyaudio = None
+
+try:
+    from serial_control import SerialControl
+except BaseException:
+    SerialControl = None
 
 
 # ---------------------------- deployment settings ----------------------------
@@ -61,9 +86,63 @@ PERSON_HEIGHT_M = 1.7
 RISK_CONFIRM_FRAMES = 2
 STARTUP_GRACE_MS = 1200
 
-ENABLE_PERSON_BUZZER = True
-ENABLE_VEHICLE_BUZZER = False
-BUZZER_DUTY = 50
+ENABLE_PERSON_SPEAKER = True
+ENABLE_VEHICLE_SPEAKER = True
+SPEAKER_SAMPLE_RATE = 44100
+SPEAKER_FRAME_SAMPLES = 1024
+# PCM prompts have a low speech average level; apply a strong boost for audibility.
+# _boost_pcm() hard-limits samples to avoid 16-bit overflow.
+SPEAKER_AMPLITUDE = 1.0
+# Raise the speech average level while keeping hard limiting for 16-bit output.
+SPEECH_GAIN = 12.0
+SPEECH_PERSON_PCM_PATH = "/sdcard/rear_vehicle/attention_person.pcm"
+SPEECH_VEHICLE_PCM_PATH = "/sdcard/rear_vehicle/attention_vehicle.pcm"
+USE_SPEECH_PROMPT = True
+ALERT_REPEAT_COOLDOWN_MS = 5000
+SPEECH_REPEAT_ATTENTION_MS = ALERT_REPEAT_COOLDOWN_MS
+SPEECH_REPEAT_DANGER_MS = ALERT_REPEAT_COOLDOWN_MS
+# Keep the hardware buzzer on the tested 2700 Hz tone.
+BUZZER_TONE = "classic"
+BUZZER_TONE_PRESETS = {
+    "piercing": {
+        "frequencies": (4000, 5200),
+        "duration_s": 0.055,
+        "gap_ms": 25,
+        "beeps": 2,
+        "waveform": "square",
+    },
+    "classic": {
+        "frequencies": (2800,),
+        "duration_s": 0.08,
+        "gap_ms": 70,
+        "beeps": 2,
+        "waveform": "sine",
+    },
+    "alarm": {
+        "frequencies": (3200, 4800),
+        "duration_s": 0.07,
+        "gap_ms": 30,
+        "beeps": 2,
+        "waveform": "square",
+    },
+    "soft": {
+        "frequencies": (2200,),
+        "duration_s": 0.12,
+        "gap_ms": 100,
+        "beeps": 2,
+        "waveform": "sine",
+    },
+}
+BUZZER_PRESET = BUZZER_TONE_PRESETS.get(
+    BUZZER_TONE, BUZZER_TONE_PRESETS["piercing"]
+)
+# Match ``voice -1.py``: a warm 2700 Hz two-beep alert at full volume.
+BUZZER_FREQUENCY = 2700
+BUZZER_VOLUME = 100
+BUZZER_DURATION_S = 0.08
+BUZZER_GAP_MS = 70
+BUZZER_BEEPS = 2
+
 TRACK_IOU_THRESHOLD = 0.30
 TRACK_MAX_AGE_MS = 1200
 DEBUG_LOG_EVERY_FRAMES = 30
@@ -484,59 +563,339 @@ class RiskController:
         return results, overall
 
 
+def _make_tone_bytes(
+    frequency,
+    duration_ms,
+    amplitude=SPEAKER_AMPLITUDE,
+    waveform="square",
+):
+    """Generate a selectable sine, square, or sawtooth buzzer tone."""
+    sample_count = int(SPEAKER_SAMPLE_RATE * duration_ms / 1000)
+    amplitude_value = int(32767 * amplitude)
+    samples = array("h")
+    for index in range(sample_count):
+        phase = (frequency * index / SPEAKER_SAMPLE_RATE) % 1.0
+        if waveform == "sine":
+            value = int(amplitude_value * math.sin(2.0 * math.pi * phase))
+        elif waveform == "saw":
+            value = int(amplitude_value * (2.0 * phase - 1.0))
+        else:
+            fundamental = 1.0 if phase < 0.5 else -1.0
+            third = 1.0 if (phase * 3.0) % 1.0 < 0.5 else -1.0
+            fifth = 1.0 if (phase * 5.0) % 1.0 < 0.5 else -1.0
+            value = int(
+                amplitude_value
+                * (0.55 * fundamental + 0.30 * third + 0.15 * fifth)
+            )
+        samples.append(value)
+        samples.append(value)
+    return bytes(samples)
+
+
+def _boost_pcm(data, gain):
+    """Increase 16-bit little-endian stereo PCM level with hard limiting."""
+    if gain <= 1.0:
+        return data
+    samples = array("h")
+    for offset in range(0, len(data) - 1, 2):
+        sample = data[offset] | (data[offset + 1] << 8)
+        if sample >= 32768:
+            sample -= 65536
+        sample = int(sample * gain)
+        if sample > 32767:
+            sample = 32767
+        elif sample < -32768:
+            sample = -32768
+        samples.append(sample)
+    return bytes(samples)
+
+
 class AlertController:
+    """Non-blocking K230 speaker alert using the onboard codec and YbSpeaker."""
+
     def __init__(self):
-        self.buzzer = None
-        if (ENABLE_PERSON_BUZZER or ENABLE_VEHICLE_BUZZER) and YbBuzzer is not None:
+        self.level = 0
+        self._closed = False
+        self._stream = None
+        self._audio = None
+        self._speaker = None
+        self._thread = None
+        self._thread_done = False
+        self._fallback_last_ms = 0
+        self._frame_bytes = SPEAKER_FRAME_SAMPLES * 4
+        self._silence = bytes(self._frame_bytes)
+        self._speech_person = None
+        self._speech_vehicle = None
+        self._prompt_kind = 0
+        self._fallback_tone = None
+        self._buzzer = None
+        self._buzzer_active = False
+        self._buzzer_kind = 0
+        self._last_buzzer_ms = 0
+        self._last_buzzer_kind = 0
+        self._last_prompt_ms = 0
+        self._last_prompt_key = 0
+
+        # Keep the hardware chirp independent from the PCM speaker path.
+        if YbBuzzer is not None:
             try:
-                self.buzzer = YbBuzzer()
+                self._buzzer = YbBuzzer()
             except BaseException as error:
                 print("buzzer init failed:", error)
-        self.level = 0
-        self.last_beep_ms = 0
-        self.beep_until_ms = 0
-        self.beep_active = False
 
-    def update(self, level):
-        if self.buzzer is None:
+        if not (ENABLE_PERSON_SPEAKER or ENABLE_VEHICLE_SPEAKER):
             return
+        if pyaudio is None or YbSpeaker is None:
+            print("speaker unavailable: pyaudio=", pyaudio, "YbSpeaker=", YbSpeaker)
+            return
+
+        try:
+            self._speaker = YbSpeaker()
+            self._speaker.enable()
+            self._audio = pyaudio.PyAudio()
+            # The official K230 example configures audio VB buffers before
+            # MediaManager.init(), then opens the output stream after it.
+            self._audio.initialize(SPEAKER_FRAME_SAMPLES)
+            self._fallback_tone = _make_tone_bytes(
+                BUZZER_FREQUENCY,
+                int(BUZZER_DURATION_S * 1000),
+                waveform=BUZZER_PRESET["waveform"],
+            )
+            if USE_SPEECH_PROMPT:
+                for path, attribute in (
+                    (SPEECH_PERSON_PCM_PATH, "_speech_person"),
+                    (SPEECH_VEHICLE_PCM_PATH, "_speech_vehicle"),
+                ):
+                    try:
+                        with open(path, "rb") as speech_file:
+                            speech = speech_file.read()
+                        if not speech or len(speech) % 4 != 0:
+                            raise ValueError("invalid stereo PCM data")
+                        setattr(self, attribute, _boost_pcm(speech, SPEECH_GAIN))
+                        print("speech prompt loaded:", path, len(speech))
+                    except BaseException as error:
+                        setattr(self, attribute, None)
+                        print("speech prompt load failed:", path, error)
+        except BaseException as error:
+            print("speaker prepare failed:", error)
+            self._safe_close(close_buzzer=False)
+
+    def start(self):
+        if self._audio is None or self._stream is not None:
+            return
+        try:
+            self._stream = self._audio.open(
+                format=self._audio.get_format_from_width(2),
+                channels=2,
+                rate=44100,
+                input=0,
+                output=1,
+                frames_per_buffer=SPEAKER_FRAME_SAMPLES,
+            )
+            if _thread is not None:
+                self._thread = _thread.start_new_thread(self._run, ())
+            print("speaker ready: rate=44100")
+        except BaseException as error:
+            print("speaker start failed:", error)
+            self._safe_close(close_buzzer=False)
+
+    def _start_buzzer_alert(self, kind):
+        if self._buzzer is None or _thread is None:
+            return False
+        self._buzzer_kind = int(kind)
+        if self._buzzer_active:
+            return False
         now_ms = time.ticks_ms()
-        if level == 0:
-            if self.beep_active or self.level != 0:
-                self.buzzer.off()
-            self.beep_active = False
-            self.level = 0
-            return
-
-        frequency = 2700
-        interval_ms = 700 if level == 1 else 220
-        duration_ms = 180 if level == 1 else 240
-
-        if self.level != level:
-            if self.beep_active:
-                self.buzzer.off()
-                self.beep_active = False
-            self.last_beep_ms = 0
-
-        if self.beep_active and time.ticks_diff(now_ms, self.beep_until_ms) >= 0:
-            self.buzzer.off()
-            self.beep_active = False
-
-        if not self.beep_active and (
-            self.last_beep_ms == 0 or time.ticks_diff(now_ms, self.last_beep_ms) >= interval_ms
+        buzzer_key = self.level * 10 + self._buzzer_kind
+        if (
+            self._last_buzzer_kind == buzzer_key
+            and self._last_buzzer_ms != 0
+            and time.ticks_diff(now_ms, self._last_buzzer_ms) < ALERT_REPEAT_COOLDOWN_MS
         ):
-            self.buzzer.on(frequency, BUZZER_DUTY, 0)
-            self.beep_active = True
-            self.beep_until_ms = now_ms + duration_ms
-            self.last_beep_ms = now_ms
-        self.level = level
+            return False
+        self._buzzer_active = True
+        try:
+            _thread.start_new_thread(self._buzzer_alert_worker, ())
+            self._last_buzzer_kind = buzzer_key
+            self._last_buzzer_ms = now_ms
+            return True
+        except BaseException as error:
+            # A full thread pool or a board-specific thread error must not
+            # terminate the camera/inference loop.
+            self._buzzer_active = False
+            print("buzzer thread start failed:", error)
+            return False
 
-    def close(self):
-        if self.buzzer is not None:
+    def _buzzer_alert_worker(self):
+        try:
+            active_kind = self._buzzer_kind
+            for beep_index in range(BUZZER_BEEPS):
+                if (
+                    self._closed
+                    or self.level <= 0
+                    or self._buzzer_kind != active_kind
+                ):
+                    return
+                self._buzzer.on(BUZZER_FREQUENCY, BUZZER_VOLUME, BUZZER_DURATION_S)
+                # YbBuzzer.on() is non-blocking; keep each beep alive like
+                # voice -1.py before applying the inter-beep gap.
+                time.sleep_ms(int(BUZZER_DURATION_S * 1000))
+                if beep_index + 1 < BUZZER_BEEPS:
+                    time.sleep_ms(BUZZER_GAP_MS)
+        except BaseException as error:
+            print("buzzer alert failed:", error)
+        finally:
             try:
-                self.buzzer.off()
+                self._buzzer.off()
             except BaseException:
                 pass
+            self._buzzer_active = False
+
+    def update(self, level, person_present=False, prompt_kind=0):
+        level = int(level)
+        prompt_kind = int(prompt_kind)
+        self.level = level
+        self._buzzer_kind = prompt_kind if level > 0 else 0
+        if level > 0 and prompt_kind > 0:
+            self._start_buzzer_alert(prompt_kind)
+        else:
+            if self._buzzer is not None:
+                try:
+                    self._buzzer.off()
+                except BaseException:
+                    pass
+        if self._stream is None:
+            return
+        self._prompt_kind = prompt_kind
+        if self._thread is not None:
+            return
+
+        now_ms = time.ticks_ms()
+        if level <= 0:
+            self._fallback_last_ms = 0
+            return
+        interval_ms = 700 if level == 1 else 280
+        if self._fallback_last_ms == 0 or time.ticks_diff(now_ms, self._fallback_last_ms) >= interval_ms:
+            self._write_buffer(self._fallback_tone, level)
+            self._fallback_last_ms = now_ms
+
+    def _write_buffer(self, data, level, prompt_kind=0):
+        if self._stream is None or not data:
+            return
+        position = 0
+        while position < len(data):
+            if self._closed or self.level != level or self._prompt_kind != prompt_kind:
+                return
+            chunk = data[position:position + self._frame_bytes]
+            if len(chunk) < self._frame_bytes:
+                chunk = chunk + self._silence[len(chunk):]
+            try:
+                self._stream.write(chunk)
+            except BaseException as error:
+                # Audio devices can disappear independently of the camera.
+                # Disable only the audio path and keep detection running.
+                print("speaker write failed:", error)
+                self._safe_close(close_buzzer=False)
+                return
+            position += self._frame_bytes
+
+    def _wait_for_level(self, level, duration_ms, prompt_kind=None):
+        end_ms = time.ticks_ms() + duration_ms
+        while (
+            not self._closed
+            and self.level == level
+            and (prompt_kind is None or self._prompt_kind == prompt_kind)
+        ):
+            if time.ticks_diff(end_ms, time.ticks_ms()) <= 0:
+                break
+            time.sleep_ms(10)
+        return self.level == level and (
+            prompt_kind is None or self._prompt_kind == prompt_kind
+        )
+
+    def _run(self):
+        try:
+            while not self._closed:
+                level = self.level
+                if level <= 0:
+                    time.sleep_ms(10)
+                    continue
+                prompt_kind = self._prompt_kind
+                speech = (
+                    self._speech_person
+                    if prompt_kind == 1
+                    else self._speech_vehicle
+                    if prompt_kind == 2
+                    else None
+                )
+                repeat_ms = (
+                    SPEECH_REPEAT_ATTENTION_MS
+                    if level == 1
+                    else SPEECH_REPEAT_DANGER_MS
+                )
+                prompt_key = level * 10 + prompt_kind
+                now_ms = time.ticks_ms()
+                can_play = (
+                    self._last_prompt_key != prompt_key
+                    or self._last_prompt_ms == 0
+                    or time.ticks_diff(now_ms, self._last_prompt_ms) >= repeat_ms
+                )
+                if speech is not None:
+                    if can_play:
+                        self._write_buffer(speech, level, prompt_kind)
+                        self._last_prompt_key = prompt_key
+                        self._last_prompt_ms = now_ms
+                    self._wait_for_level(level, repeat_ms, prompt_kind)
+                else:
+                    if can_play:
+                        self._write_buffer(self._fallback_tone, level, prompt_kind)
+                        self._last_prompt_key = prompt_key
+                        self._last_prompt_ms = now_ms
+                    self._wait_for_level(level, repeat_ms, prompt_kind)
+        except BaseException as error:
+            print("speaker thread stopped:", error)
+        finally:
+            self._thread_done = True
+
+    def _safe_close(self, close_buzzer=True):
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()
+            except BaseException:
+                pass
+            try:
+                self._stream.close()
+            except BaseException:
+                pass
+            self._stream = None
+        if self._audio is not None:
+            try:
+                self._audio.terminate()
+            except BaseException:
+                pass
+            self._audio = None
+        if self._speaker is not None:
+            try:
+                self._speaker.disable()
+            except BaseException:
+                pass
+            self._speaker = None
+        if close_buzzer and self._buzzer is not None:
+            try:
+                self._buzzer.off()
+            except BaseException:
+                pass
+            self._buzzer = None
+
+    def close(self):
+        self._closed = True
+        if self._thread is not None:
+            for _ in range(20):
+                if self._thread_done:
+                    break
+                time.sleep_ms(50)
+            self._thread = None
+        self._safe_close()
 
 
 def exitpoint():
@@ -544,6 +903,14 @@ def exitpoint():
         os.exitpoint()
     except AttributeError:
         pass
+
+
+def _path_exists(path):
+    try:
+        os.stat(path)
+        return True
+    except BaseException:
+        return False
 
 
 def main():
@@ -559,7 +926,8 @@ def main():
     pipeline_ready = False
     vehicle_detector = None
     person_detector = None
-    alert = None
+    alert = AlertController()
+    control = SerialControl() if SerialControl is not None else None
     try:
         pipeline.create()
         pipeline_ready = True
@@ -572,21 +940,33 @@ def main():
             debug_mode=0,
         )
         vehicle_detector.config_preprocess()
-        person_detector = DetectionApp(
-            PERSON_KMODEL_PATH,
-            model_input_size=(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
-            rgb888p_size=RGB888P_SIZE,
-            display_size=DISPLAY_SIZE,
-            class_map=PERSON_CLASS_MAP,
-            confidence_threshold=0.20,
-            target_class_index=0,
-            debug_mode=0,
-        )
-        person_detector.config_preprocess()
-        print("rear vehicle ready:", KMODEL_PATH, "person:", PERSON_KMODEL_PATH, "person_buzzer:", ENABLE_PERSON_BUZZER, "vehicle_buzzer:", ENABLE_VEHICLE_BUZZER, "display:", DISPLAY_MODE)
+        if _path_exists(PERSON_KMODEL_PATH):
+            try:
+                person_detector = DetectionApp(
+                    PERSON_KMODEL_PATH,
+                    model_input_size=(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
+                    rgb888p_size=RGB888P_SIZE,
+                    display_size=DISPLAY_SIZE,
+                    class_map=PERSON_CLASS_MAP,
+                    confidence_threshold=0.20,
+                    target_class_index=0,
+                    debug_mode=0,
+                )
+                person_detector.config_preprocess()
+            except BaseException as error:
+                print("person model disabled:", error)
+                if person_detector is not None:
+                    try:
+                        person_detector.deinit()
+                    except BaseException:
+                        pass
+                person_detector = None
+        else:
+            print("person model missing, vehicle-only mode:", PERSON_KMODEL_PATH)
+        print("rear vehicle ready:", KMODEL_PATH, "person:", person_detector is not None, "person_speaker:", ENABLE_PERSON_SPEAKER, "vehicle_speaker:", ENABLE_VEHICLE_SPEAKER, "display:", DISPLAY_MODE)
         tracker = SimpleTracker()
         risk_controller = RiskController(RGB888P_SIZE[0])
-        alert = AlertController()
+        alert.start()
         startup_ms = time.ticks_ms()
         frame_count = 0
         fps_start_ms = startup_ms
@@ -598,6 +978,10 @@ def main():
 
         while True:
             exitpoint()
+            if control is not None and not control.poll():
+                alert.update(0, False, 0)
+                time.sleep_ms(20)
+                continue
             with ScopedTiming("total", 0):
                 loop_start = time.ticks_ms()
                 frame = pipeline.get_frame()
@@ -605,9 +989,11 @@ def main():
                 vehicle_tensors = vehicle_detector.preprocess(frame)
                 vehicle_results = vehicle_detector.inference(vehicle_tensors)
                 vehicle_detections = vehicle_detector.postprocess(vehicle_results)
-                person_tensors = person_detector.preprocess(frame)
-                person_results = person_detector.inference(person_tensors)
-                person_detections = person_detector.postprocess(person_results)
+                person_detections = []
+                if person_detector is not None:
+                    person_tensors = person_detector.preprocess(frame)
+                    person_results = person_detector.inference(person_tensors)
+                    person_detections = person_detector.postprocess(person_results)
                 detections = vehicle_detections + person_detections
                 infer_end = time.ticks_ms()
                 now_ms = infer_end
@@ -626,9 +1012,9 @@ def main():
                             vehicle_alert = track["risk"]
 
                 alert_risk = 0
-                if ENABLE_PERSON_BUZZER and person_alert > alert_risk:
+                if ENABLE_PERSON_SPEAKER and person_alert > alert_risk:
                     alert_risk = person_alert
-                if ENABLE_VEHICLE_BUZZER and vehicle_alert > alert_risk:
+                if ENABLE_VEHICLE_SPEAKER and vehicle_alert > alert_risk:
                     alert_risk = vehicle_alert
 
                 if time.ticks_diff(now_ms, startup_ms) < STARTUP_GRACE_MS:
@@ -645,7 +1031,12 @@ def main():
                 draw_end = time.ticks_ms()
                 pipeline.show_image()
                 show_end = time.ticks_ms()
-                alert.update(alert_risk)
+                prompt_kind = 0
+                if person_alert > 0 and alert_risk > 0:
+                    prompt_kind = 1
+                elif vehicle_alert > 0 and alert_risk > 0:
+                    prompt_kind = 2
+                alert.update(alert_risk, person_alert > 0 and alert_risk > 0, prompt_kind)
 
                 capture_ms += time.ticks_diff(capture_end, loop_start)
                 detect_ms += time.ticks_diff(infer_end, capture_end)
@@ -668,7 +1059,7 @@ def main():
                     detail_text = ";".join(detail_parts)
                     elapsed_ms = time.ticks_diff(now_ms, fps_start_ms)
                     if elapsed_ms > 0:
-                        print("STATS FPS={:.2f} DET={} VEH={} PERSON={} RISK={} BUZZ={} DETAILS={} ms(cap={:.1f},detect={:.1f},risk={:.1f},draw={:.1f},show={:.1f})".format(
+                        print("STATS FPS={:.2f} DET={} VEH={} PERSON={} RISK={} SPK={} DETAILS={} ms(cap={:.1f},detect={:.1f},risk={:.1f},draw={:.1f},show={:.1f})".format(
                             DEBUG_LOG_EVERY_FRAMES * 1000.0 / elapsed_ms,
                             len(draw_detections),
                             len(vehicle_detections),
