@@ -1,119 +1,68 @@
 # -*- coding: utf-8 -*-
-"""Non-blocking USB-serial control for the K230 application."""
-
-import sys
-import time
+"""Non-blocking UART1 run/stop control for the K230 application."""
 
 try:
-    import _thread
+    from machine import FPIOA, UART
 except BaseException:
-    _thread = None
+    FPIOA = None
+    UART = None
+
+UART_ID = 1
+UART_TX_GPIO = 9
+UART_RX_GPIO = 10
+UART_BAUDRATE = 152000
+CMD_STOP = 0x00
+CMD_START = 0x01
 
 
 class SerialControl:
-    """Accept START, STOP, STATUS and PING commands from the USB CDC port."""
-
     def __init__(self):
         self.enabled = True
-        self._buffer = ""
-        self._stream = getattr(sys, "stdin", None)
-        self._poller = None
-        self._reader_started = False
+        self._uart = None
         try:
-            if _thread is not None and self._stream is not None:
-                try:
-                    _thread.start_new_thread(self._reader, ())
-                    self._reader_started = True
-                except BaseException:
-                    self._reader_started = False
-            if self._reader_started:
-                print("serial control ready: stdin reader")
-            else:
-                import uselect
-                self._poller = uselect.poll()
-                self._poller.register(self._stream, uselect.POLLIN)
-                print("serial control ready: poll reader")
+            if FPIOA is None or UART is None:
+                raise RuntimeError("machine UART unavailable")
+            fpioa = FPIOA()
+            fpioa.set_function(UART_TX_GPIO, FPIOA.UART1_TXD)
+            fpioa.set_function(UART_RX_GPIO, FPIOA.UART1_RXD)
+            self._uart = UART(UART_ID, baudrate=UART_BAUDRATE, bits=8, parity=0, stop=1)
+            print("UART1 control ready: TX=GPIO9 RX=GPIO10 baud=152000")
         except BaseException as error:
-            print("serial control unavailable:", error)
+            print("UART1 control unavailable:", error)
 
     def _reply(self, message):
-        try:
-            print("CTRL " + message)
-            sys.stdout.flush()
-        except BaseException:
-            pass
-
-    def _set_state(self, enabled):
-        self.enabled = enabled
-        self._reply("OK RUNNING" if enabled else "OK STOPPED")
-
-    def _handle(self, command):
-        command = command.strip().upper()
-        if not command:
-            return
-        if command in ("START", "RUN", "RUN 1"):
-            self._set_state(True)
-        elif command in ("STOP", "PAUSE", "RUN 0"):
-            self._set_state(False)
-        elif command == "STATUS":
-            self._reply("STATUS " + ("RUNNING" if self.enabled else "STOPPED"))
-        elif command == "PING":
-            self._reply("PONG")
-        else:
-            self._reply("ERROR UNKNOWN_COMMAND")
-
-    def _consume(self, char):
-        if char == "\x01" or char == b"\x01":
-            self._set_state(True)
-            return
-        if char == "\x00" or char == b"\x00":
-            self._set_state(False)
-            return
-        if isinstance(char, bytes):
-            if char in (b"\r", b"\n"):
-                self._handle(self._buffer)
-                self._buffer = ""
-                return
+        print(message)
+        if self._uart is not None:
             try:
-                char = char.decode("ascii")
-            except BaseException:
-                return
-        if char in ("\r", "\n"):
-            self._handle(self._buffer)
-            self._buffer = ""
-        else:
-            self._buffer += char
-            if len(self._buffer) > 64:
-                self._buffer = ""
-                self._reply("ERROR COMMAND_TOO_LONG")
-
-    def _reader(self):
-        """Block in the firmware stdin reader so USB CDC input is not lost."""
-        while True:
-            try:
-                char = self._stream.read(1)
-                if char:
-                    self._consume(char)
-                else:
-                    time.sleep_ms(10)
+                self._uart.write((message + "\r\n").encode("ascii"))
             except BaseException as error:
-                print("serial control reader error:", error)
-                return
+                print("UART1 reply error:", error)
+
+    def _consume(self, data):
+        for value in data:
+            if value == CMD_START:
+                self.enabled = True
+                self._reply("START")
+            elif value == CMD_STOP:
+                self.enabled = False
+                self._reply("STOP")
 
     def poll(self):
-        """Read all currently available input without blocking the AI loop."""
-        if self._reader_started:
+        if self._uart is None:
             return self.enabled
-        if self._poller is None:
-            return self.enabled
-        for _ in range(64):
-            try:
-                if not self._poller.poll(0):
-                    break
-                char = self._stream.read(1)
-            except BaseException:
-                break
-            if not char:
-                break
-            self._consume(char)
+        try:
+            if self._uart.any():
+                data = self._uart.read()
+                if data:
+                    self._consume(data)
+        except BaseException as error:
+            print("UART1 control read error:", error)
         return self.enabled
+
+    def close(self):
+        if self._uart is not None:
+            try:
+                self._uart.deinit()
+            except BaseException:
+                pass
+            self._uart = None

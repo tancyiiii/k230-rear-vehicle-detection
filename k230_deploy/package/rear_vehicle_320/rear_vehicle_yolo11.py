@@ -1059,6 +1059,8 @@ def main():
     finally:
         if alert is not None:
             alert.close()
+        if control is not None:
+            control.close()
         if person_detector is not None:
             person_detector.deinit()
         if vehicle_detector is not None:

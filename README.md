@@ -87,7 +87,7 @@ rear_vehicle_yolo11_640.py
 2. Windows 文件资源管理器中通常会出现 `CanMV` 便携式设备。
 3. 进入 `CanMV/sdcard`。
 4. 将当前最新版文件从本工程的 `k230_deploy/board/` 和 `k230_deploy/kmodel/` 复制到 `/sdcard/rear_vehicle/`。
-其中 `serial_control.py` 也必须复制到 `/sdcard/rear_vehicle/`，用于 USB 通信口控制。
+其中 `serial_control.py` 也必须复制到 `/sdcard/rear_vehicle/`，用于 UART1 外部控制。
 5. 当前 320 源文件比 `rear_vehicle_k230_320.zip` 更新，发布或演示前应以 `k230_deploy/board/rear_vehicle_yolo11.py` 为准，不要直接依赖旧 ZIP。
 6. 等待文件写入完成后再拔线或断电。
 
@@ -223,36 +223,40 @@ rear vehicle ready: ...
 - 不要删除 `/sdcard/rear_vehicle/`，否则模型和主程序会一并丢失。
 - 如果启动失败，程序会尝试写入 `/sdcard/rear_vehicle/boot_error.txt`。
 
-## 7.1 外部控制主程序运行
+## 7.1 UART1 外部控制主程序
 
-将 K230 上方的通信 USB-C 口连接到另一台计算机。另一台计算机会枚举出一个新的串口（Windows 可能显示为 `COMx`，Linux 可能显示为 `/dev/ttyACM0`）。主程序启动后接收十六进制启停字节：
+使用 USB 转 TTL 模块连接 K230 的 UART1：
 
 ```text
-0x01   -> CTRL OK RUNNING
-0x00   -> CTRL OK STOPPED
-STATUS -> CTRL STATUS RUNNING/STOPPED
-PING   -> CTRL PONG
+USB-TTL TXD -> K230 GPIO10/RX
+USB-TTL RXD -> K230 GPIO9/TX
+USB-TTL GND -> K230 GND
 ```
 
-正式启停协议为单字节：`0x01` 启动，`0x00` 停止。通信口收到命令后会返回 `CTRL OK RUNNING` 或 `CTRL OK STOPPED`。
+串口参数为 `152000 baud、8N1、无流控`。启停协议是单字节十六进制：
 
-更新控制模块后必须重新复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端，并重启主程序；启动日志应包含 `serial control ready: stdin reader`。发送 `0x00` 后应收到 `CTRL OK STOPPED`，发送 `0x01` 后应收到 `CTRL OK RUNNING`。
-
-`STOP` 会暂停取帧、推理和报警，`START` 从下一帧恢复；模型不会重复加载。电脑端调用脚本：
-
-```powershell
-python k230_deploy/tools/serial_control_client.py --port COMx stop
-python k230_deploy/tools/serial_control_client.py --port COMx status
-python k230_deploy/tools/serial_control_client.py --port COMx start
+```text
+0x01 -> 启动，板端返回 START
+0x00 -> 停止，板端返回 STOP
 ```
 
-这里的 `COMx` 必须替换成另一台计算机实际枚举到的端口。控制脚本的默认波特率为 `2000000 bps`，格式为 `8N1`；该 USB CDC 链路实际由固件处理，波特率主要用于串口工具参数一致。
+串口工具选择 HEX 发送，只输入 `01` 或 `00`，不要输入字符 `0x`，也不要添加回车换行。停止时暂停取帧、推理和报警，启动后从下一帧恢复，模型不会重复加载。
 
-电脑端需要安装 `pyserial`：
+更新后复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端并重启。启动日志应包含：
+
+```text
+UART1 control ready: TX=GPIO9 RX=GPIO10 baud=152000
+```
+
+电脑端工具需要 `pyserial`：
 
 ```powershell
 python -m pip install pyserial
+python k230_deploy/tools/serial_control_client.py --port COMx stop
+python k230_deploy/tools/serial_control_client.py --port COMx start
 ```
+
+`COMx` 替换为 USB 转 TTL 模块在控制计算机上枚举出的端口。
 
 ## 8. 参数调整
 

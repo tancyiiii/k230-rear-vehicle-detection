@@ -187,9 +187,9 @@ STATS FPS=18.7 DET=1 RISK=2
 
 再次上电后就不会自动运行识别程序。不要删除 `/sdcard/rear_vehicle/`，那里保存模型和主程序。
 
-## 10.1 USB 串口控制识别运行状态
+## 10.1 UART1 控制识别运行状态
 
-将 K230 上方的通信 USB-C 口连接到外部计算机。外部计算机会枚举出一个串口（Windows 为 `COMx`，Linux 通常为 `/dev/ttyACM0`），板端通过该 USB CDC 串口接收逐行 ASCII 命令。控制模块文件为：
+控制模块文件为：
 
 ```text
 /sdcard/rear_vehicle/serial_control.py
@@ -199,24 +199,22 @@ STATS FPS=18.7 DET=1 RISK=2
 
 | 命令 | 响应 | 作用 |
 |---|---|---|
-| `0x01` | `CTRL OK RUNNING` | 恢复取帧、推理和报警 |
-| `0x00` | `CTRL OK STOPPED` | 暂停取帧和推理，并关闭报警 |
-| `STATUS` | `CTRL STATUS RUNNING/STOPPED` | 查询当前状态 |
-| `PING` | `CTRL PONG` | 测试通信 |
+| `0x01` | `START` | 恢复取帧、推理和报警 |
+| `0x00` | `STOP` | 暂停取帧和推理，并关闭报警 |
 
-正式启停协议使用单字节十六进制：`0x01` 启动，`0x00` 停止；板端返回对应的 `CTRL OK ...` 响应。
+UART1 接线：USB-TTL TXD->GPIO10/RX、RXD->GPIO9/TX、GND->GND。串口参数：`152000 baud、8N1、无流控`。串口工具选择 HEX 发送，输入 `01` 启动、`00` 停止，不输入 `0x`。
 
-控制模块使用后台线程阻塞读取 USB CDC 的 `stdin`，不依赖 `uselect.poll()`。控制端默认波特率为 `2000000 bps`，格式为 `8N1`。更新后需要重新复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端并重启；启动日志应出现 `serial control ready: stdin reader`。
+更新后需要重新复制 `serial_control.py` 和 `rear_vehicle_yolo11.py` 到板端并重启；启动日志应出现 `UART1 control ready: TX=GPIO9 RX=GPIO10 baud=152000`。
 
-电脑端已提供调用脚本（需要 `pyserial`）：
+电脑端安装 `pyserial` 后使用：
 
 ```powershell
+python -m pip install pyserial
 python k230_deploy/tools/serial_control_client.py --port COMx stop
-python k230_deploy/tools/serial_control_client.py --port COMx status
 python k230_deploy/tools/serial_control_client.py --port COMx start
 ```
 
-`COMx` 必须替换为外部计算机实际识别出的端口。当前通信协议先保留启停控制帧；如果还要传输业务数据，需要在此基础上约定数据帧格式。
+`COMx` 替换为 USB-TTL 模块在控制计算机上枚举出的端口。
 
 `STOP` 不会卸载模型或退出自动启动程序，适合外部设备反复控制；按 `Ctrl+C` 仍可退出主程序。
 
